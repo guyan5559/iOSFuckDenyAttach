@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "find_kernel_base_under_checkra1n.h"
+#include "libkrw.h"
 
 #include <sys/proc.h>
 #include <sys/param.h>
@@ -281,23 +281,20 @@ struct  proc {
 //iphone8 plus  ios 13.6  kernel
 #define TARGET_KERNELCACHE_VERSION_STRING "@(#)VERSION: Darwin Kernel Version 19.6.0: Sat Jun 27 04:36:08 PDT 2020; root:xnu-6153.142.1~4/RELEASE_ARM64_T8015"
 
-uint64_t get_kslide(void)
-{
-    task_t tfp0;
-    kern_return_t ret = task_for_pid(mach_task_self(), 0, &tfp0);
-    if(ret != KERN_SUCCESS) return 0;
-    task_dyld_info_data_t info;
-    uint32_t count = TASK_DYLD_INFO_COUNT;
-    ret = task_info(tfp0, TASK_DYLD_INFO, (task_info_t)&info, &count);
-    if(ret != KERN_SUCCESS) return 0;
-    return info.all_image_info_size;
+#define kernel_read(address, data, size) kread(address, data, size)
+#define kernel_write(address, data, size) kwrite(address, data, size)
+#define kernel_write32(val, addr) kwrite(&val, addr, sizeof(int32_t))
+
+uint64_t kernel_read64(uint64_t address) {
+	int64_t val;
+	kread(address, &val, sizeof(int64_t));
+	return val;
 }
 
 int main() {
-	kernel_task_init();
-	uint64_t kb = get_kslide() + 0xFFFFFFF007004000;
+	uint64_t kb;
+	kbase(&kb);
 	printf("kbase: 0x%llx\n" , kb);
-	printf("kslide: 0x%llx\n" , get_kslide());
 	for (size_t i = 0; i < 8; i++) {
 		printf("%016llx\n", kernel_read64(kb + 8 * i));
 	}
@@ -306,7 +303,7 @@ int main() {
 	//iphone8 plus  ios 13.6  kernel
 	uint64_t versionstraddr = kb + 0x2FFC4;
     char versionstr[256];
-    if(kernel_read(versionstraddr, (void *)&versionstr, sizeof(versionstr)))
+    if(!kernel_read(versionstraddr, (void *)&versionstr, sizeof(versionstr)))
     {
         printf("%s\n", versionstr);
         if(strcmp(TARGET_KERNELCACHE_VERSION_STRING,versionstr) == 0)
@@ -316,9 +313,9 @@ int main() {
             // uint64_t kernel_proc0 = kernel_read64(kb + 0x226AF60);
 			uint64_t kernel_proc0 = kernel_read64(kb + 0x2252DB0);
 			//iphone8 plus  ios 13.6  kernproc
-            struct proc * proc0 =  (void *)malloc(sizeof(struct proc));
+            struct proc * proc0 =  (struct proc *)malloc(sizeof(struct proc));
 
-            if(!kernel_read(kernel_proc0, (void *)proc0, sizeof(struct proc)))
+            if(kernel_read(kernel_proc0, proc0, sizeof(struct proc)))
             {
                 printf("proc0 read failed\n");
                 return -1;
@@ -328,7 +325,7 @@ int main() {
             struct proc * proc1 =  (struct proc *)malloc(sizeof(struct proc));
             uint64_t preptr = (uint64_t)(proc0->p_list.le_prev);
             while(preptr){
-                if(!kernel_read(preptr, (void *)proc1, sizeof(struct proc)))
+                if(kernel_read(preptr, proc1, sizeof(struct proc)))
                 {
                     printf("procnext read failed\n");
                     return -1;
@@ -342,14 +339,14 @@ int main() {
                     int lflagvalue = proc1->p_lflag;
                     printf("(%llu)%s  proc = 0x%llx   lflag = 0x%x  lflag offset = 0x%llx"
                         ,proc1->p_uniqueid, 
-                        proc1->p_comm,//(char *)((int64_t)proc1 + 0x258),
+                        proc1->p_comm,
                         preptr,lflagvalue,lflagoffset);
 
                         if(ISSET(lflagvalue, P_LNOATTACH))
                         {
                             printf(" !!!P_LNOATTACH set");
                             CLR(lflagvalue, P_LNOATTACH);
-                            KERNEL_WRITE32(preptr + lflagoffset, lflagvalue);
+                            kernel_write32(lflagvalue, preptr + lflagoffset);
                         }
                         printf("\n");
 
